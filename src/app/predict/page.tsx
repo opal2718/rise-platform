@@ -51,22 +51,23 @@ export default function PredictPage() {
     return days.flatMap(day => hours.map(hour => `${day} ${hour}`)).concat(['예측1', '예측2', '예측3', '예측4', '예측5']);
   };
 
+  const allLabels = generateMockHourlyLabels();
   const historicalData = Array.from({ length: 49 }, (_, i) => 100 + Math.sin(i / 3) * 5 + Math.random() * 2);
-  const predictedData = [...Array(49).fill(null), 110, 111, 112, 113, 114];
+  const predictedData = [110, 111, 112, 113, 114];
 
   const mockChartData = {
-    labels: generateMockHourlyLabels(),
+    labels: allLabels,
     datasets: [
       {
         label: '1시간 단위 주가 (7일)',
-        data: historicalData.concat([null, null, null, null, null]),
+        data: [...historicalData, ...Array(5).fill(null)], // 길이 54
         borderColor: '#6366f1',
         fill: false,
         tension: 0.3,
       },
       {
         label: '예측 주가',
-        data: predictedData,
+        data: [...Array(49).fill(null), ...predictedData], // 예측만 있는 구간
         borderColor: '#f97316',
         borderDash: [5, 5],
         fill: false,
@@ -74,6 +75,7 @@ export default function PredictPage() {
       }
     ],
   };
+
 
   return (
     <main className="flex flex-col min-h-screen bg-[#f5f7f9]">
