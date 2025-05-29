@@ -39,7 +39,7 @@ export default function PredictPage() {
         else setRecommendation('중립');
       }
     } catch (err) {
-      setError('API 요청 실패');
+      setError('API 요청 실패'+err);
     } finally {
       setLoading(false);
     }
