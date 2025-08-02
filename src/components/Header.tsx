@@ -39,7 +39,7 @@ export default function Header() {
               key={name}
               href={href}
               className={`relative transition-all duration-200 ${
-                pathname === href ? 'text-blue-600' : 'text-gray-600 hover:text-blue-600'
+                pathname === href ? 'text-theme' : 'text-gray-600 hover:text-blue-600'
               }`}
             >
               {name}

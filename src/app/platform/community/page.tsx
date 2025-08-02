@@ -6,29 +6,34 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import Header from '@/components/Header';
 import { useState } from "react";
+import { supabase } from '../../../lib/supabaseClient'
+//const { data, error } = await supabase.from('users').select('*')
+async function addPost(_user:string, _title:string, _text:string) {
+  const { data, error } = await supabase
+    .from('community posts')
+    .insert([
+      { title: _title, userID:_user, text:_text }
+    ])
 
+  if (error) {
+    console.error('삽입 실패:', error.message)
+  } else {
+    console.log('삽입 성공:', data)
+  }
+}
+
+const { data, error } = await supabase.from('community posts').select('*');
+console.log(data);
 const StartupCommunityPage = () => {
   const [search, setSearch] = useState("");
-
-  const posts = [
-    {
-      author: "이하람",
-      title: "창업 아이디어 피드백 부탁드려요!",
-      content: "AI를 활용한 개인 맞춤 건강관리 서비스인데, 시장성에 대한 의견이 궁금합니다.",
-    },
-    {
-      author: "김은지",
-      title: "IR 피치덱 공유합니다",
-      content: "투자 발표를 앞두고 있는데 혹시 보완할 부분 있을까요?",
-    },
-  ];
-
-  const filteredPosts = posts.filter(
+  const posts = data;
+  const filteredPosts = (posts==null)?[]:posts.filter(
     (post) =>
       post.title.toLowerCase().includes(search.toLowerCase()) ||
-      post.content.toLowerCase().includes(search.toLowerCase()) ||
-      post.author.toLowerCase().includes(search.toLowerCase())
+      post.text.toLowerCase().includes(search.toLowerCase()) ||
+      post.userID.toLowerCase().includes(search.toLowerCase())
   );
+  
 
   return (
     <div className="pt-22 px-6 max-w-4xl mx-auto grid gap-6">
@@ -55,8 +60,8 @@ const StartupCommunityPage = () => {
           <Card key={index}>
             <CardContent className="p-4">
               <h3 className="text-lg font-semibold">{post.title}</h3>
-              <p className="text-sm text-muted-foreground mb-1">by {post.author}</p>
-              <p>{post.content}</p>
+              <p className="text-sm text-muted-foreground mb-1">by {post.userID}</p>
+              <p>{post.text}</p>
             </CardContent>
           </Card>
         ))}
