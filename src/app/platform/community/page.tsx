@@ -20,6 +20,7 @@ async function addPost(_user:string, _title:string, _text:string) {
   } else {
     console.log('삽입 성공:', data)
   }
+  location.reload();
 }
 
 const { data, error } = await supabase.from('community posts').select('*');
@@ -33,7 +34,11 @@ const StartupCommunityPage = () => {
       post.text.toLowerCase().includes(search.toLowerCase()) ||
       post.userID.toLowerCase().includes(search.toLowerCase())
   );
-  
+  const [title, setTitle] = useState('')
+  const [content, setContent] = useState('')
+  const handleSubmit = () => {
+    addPost("TESTID", title, content);
+  }
 
   return (
     <div className="pt-22 px-6 max-w-4xl mx-auto grid gap-6">
@@ -49,9 +54,9 @@ const StartupCommunityPage = () => {
       <Card>
         <CardContent className="p-6 grid gap-4">
           <h2 className="text-xl font-bold">✏️ 새 글 작성</h2>
-          <Input placeholder="제목을 입력하세요" />
-          <Textarea placeholder="내용을 입력하세요..." rows={4} />
-          <Button className="w-fit">작성 완료</Button>
+          <Input placeholder="제목을 입력하세요" value={title} onChange={(e) => setTitle(e.target.value)}/>
+          <Textarea placeholder="내용을 입력하세요..." rows={4}  value={content} onChange={(e) => setContent(e.target.value)}/>
+          <Button className="w-fit" onClick={handleSubmit}>작성 완료</Button>
         </CardContent>
       </Card>
 
