@@ -24,6 +24,7 @@ async function addPost(_user:string, _title:string, _text:string) {
 }
 
 const { data, error } = await supabase.from('community posts').select('*');
+if(error){}else{}
 console.log(data);
 const StartupCommunityPage = () => {
   const [search, setSearch] = useState("");
