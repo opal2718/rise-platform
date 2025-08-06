@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  ai1:
+    build: ./backend_ai_t_1
+    ports:
+      - "8000:8000"
+  ai2:
+    build: ./backend_ai_t_2
+    ports:
+      - "8001:8001"
+
+  backend:
+    build: ./backend_main
+    ports:
+      - "3001:3001"
+    depends_on:
+      - ai1
+
+  frontend:
+    build: ./rise-platform
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
