@@ -5,15 +5,15 @@ import Header from '@/components/Header';
 import { useEffect, useState } from "react";
 
 export default function Home() {
-  const [data, setData] = useState(null);
+  const [, setData] = useState(null);
 
   useEffect(() => {
     async function fetchData() {
-      console.log("hi"); // 여기서는 찍혀야 함
+      console.log("hii"); // 여기서는 찍혀야 함
       const res = await fetch('http://localhost:3001/api/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: 'A' }),
+        body: JSON.stringify({ text: 'A' }),
       });
       const json = await res.json();
       setData(json.result);

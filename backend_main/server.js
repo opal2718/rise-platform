@@ -25,11 +25,12 @@ app.post('/api/predict', async (req, res) => {
   const { text: A } = req.body;
 
   try {
+    console.log("hihihi");
     // Step 1: A → AI 서버 1
-    const { data: B } = await axios.post('http://127.0.0.1:8000/process', { input: "hiihiihihi" });
+    const { data: B } = await axios.post('http://0.0.0.0:8000/process', { input: "hiihiihihi" });
 
     // Step 2: B → AI 서버 2
-    const { data: C } = await axios.post('http://0.0.0.0:8001/process', { input: B.output });
+    const { data: C } = await axios.post('http://localhost:8001/process', { input: B.output });
 
     // Step 3: C → D (메인 백엔드에서 가공)
     const D = (C); // 이 함수는 직접 정의해야 해
@@ -44,6 +45,6 @@ app.post('/api/predict', async (req, res) => {
 });
 
 
-app.listen(3001, () => {
-  console.log('메인 백엔드 서버 실행 중 (http://localhost:3001)');
+app.listen(3001, '0.0.0.0', () => {
+  console.log('메인 백엔드 서버 실행 중');
 });

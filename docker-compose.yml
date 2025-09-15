@@ -4,7 +4,7 @@ services:
   ai1:
     build: ./backend_ai_t_1
     ports:
-      - "8000:8000"
+      - "8000:8000"        
   ai2:
     build: ./backend_ai_t_2
     ports:
@@ -16,6 +16,7 @@ services:
       - "3001:3001"
     depends_on:
       - ai1
+      - ai2
 
   frontend:
     build: ./rise-platform

@@ -8,11 +8,17 @@ import Header from '@/components/Header';
 import { useEffect, useState } from "react";
 import { supabase } from '../../../lib/supabaseClient';
 
+type Post = {
+  title: string;
+  text: string;
+  userID: string;
+};
+
 const StartupCommunityPage = () => {
   const [search, setSearch] = useState("");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const [posts, setPosts] = useState<any[]>([]);
+  const [posts, setPosts] = useState<Post[]>([]);
 
   // Fetch posts from Supabase
   const fetchPosts = async () => {
