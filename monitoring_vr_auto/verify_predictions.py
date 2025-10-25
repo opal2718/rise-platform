@@ -556,4 +556,4 @@ if __name__ == "__main__":
 
     # --- 추가된 부분: 종목 풀 로드 및 모델 업데이트 함수 호출 ---
     load_stock_pool() # 종목 풀 로드
-    update_models_with_random_data(num_updates_per_run=5) # 한 번 실행 시 5개 종목에 대해 업데이트 시도 (조정 가능)
+    update_models_with_random_data(num_updates_per_run=1) # 한 번 실행 시 5개 종목에 대해 업데이트 시도 (조정 가능)
