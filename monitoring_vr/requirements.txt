@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+yfinance
+requests
+
+psycopg2-binary # For PostgreSQL connection
+sqlalchemy # Optional, but recommended for ORM
+google-cloud-storage # For GCS interaction in retraining script
+river

@@ -1,0 +1,7 @@
+HTTP/1.1 422 Unprocessable Entity
+date: Sun, 14 Sep 2025 14:15:52 GMT
+server: uvicorn
+content-length: 117
+content-type: application/json
+
+{"detail":[{"type":"dict_type","loc":["body"],"msg":"Input should be a valid dictionary","input":"-encodedCommand"}]}
