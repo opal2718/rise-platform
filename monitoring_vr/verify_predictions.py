@@ -82,7 +82,7 @@ no_financial_feature_columns = [col for col in full_feature_columns if col not i
 
 _LOADED_MODELS = {}
 
-OUTDATED_SAVE_THRESHOLD = 1
+OUTDATED_SAVE_THRESHOLD = 60
 
 class Log1pTransformer:
     _supervised = False
