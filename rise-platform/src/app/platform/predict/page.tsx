@@ -49,15 +49,16 @@ export default function PredictPage() {
   const [chartData, setChartData] = useState<StockChartData | null>(null);
   const [predictedValue, setPredictedValue] = useState<null | number>(null);
 
-  const [trendingStocksData, setTrendingStocksData] = useState<TrendingStockData[]>([]);
   const trendingTickers = ["삼성전자", "AAPL", "TSLA", "NVDA"];
+  const [trendingStocksData, setTrendingStocksData] = useState<TrendingStockData[]>([]);
 
-  const [myListStocksData, setMyListStocksData] = useState<TrendingStockData[]>([]);
   const myListTickers = ["GOOG", "MSFT"];
+  const [myListStocksData, setMyListStocksData] = useState<TrendingStockData[]>([]);
 
 
   const fetchStockData = async (stockTicker: string, isTrending: boolean = false) => {
-    let data: TrendingStockData = {
+    // 'data' 변수를 'const'로 변경
+    const data: TrendingStockData = {
       ticker: stockTicker,
       chartData: null,
       currentPrice: null,
@@ -219,7 +220,7 @@ export default function PredictPage() {
     };
 
     fetchTrendingAndMyListData();
-  }, []); // Run only once on component mount
+  }, [trendingTickers, myListTickers]); // 의존성 배열에 추가
 
   const chartOptions: ChartOptions<'line'> = {
     responsive: true,
