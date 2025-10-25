@@ -49,7 +49,7 @@ export default function PredictPage() {
   const [chartData, setChartData] = useState<StockChartData | null>(null);
   const [predictedValue, setPredictedValue] = useState<null | number>(null);
 
-  const trendingTickers = ["삼성전자", "AAPL", "TSLA", "NVDA"];
+  const trendingTickers = ["AAPL", "TSLA", "NVDA"];
   const [trendingStocksData, setTrendingStocksData] = useState<TrendingStockData[]>([]);
 
   const myListTickers = ["GOOG", "MSFT"];

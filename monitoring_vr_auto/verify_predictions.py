@@ -11,7 +11,9 @@ from google.cloud import storage
 import logging
 import numpy as np
 import random
-from typing import Dict, Any, Optional, List
+import requests
+import json
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -50,7 +52,6 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # GCS configuration
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "your-gcs-bucket-name")
-
 GCS_MODEL_FOLDER = "" 
 GCS_OUTDATED_FOLDER = "outdated" 
 
@@ -59,10 +60,9 @@ MODEL_NO_FINANCIALS_FILENAME = "model_no_financials.pkl"
 MODEL_WITH_FINANCIALS_GCS_PATH = os.path.join(GCS_MODEL_FOLDER, MODEL_WITH_FINANCIALS_FILENAME)
 MODEL_NO_FINANCIALS_GCS_PATH = os.path.join(GCS_MODEL_FOLDER, MODEL_NO_FINANCIALS_FILENAME)
 
-# --- MODIFIED: GCS 경로 추가 ---
-GCS_NASDAQ_LISTED_FILE = os.path.join(GCS_MODEL_FOLDER, 'nasdaqlisted.txt')
-GCS_KRX_LISTED_FILE = os.path.join(GCS_MODEL_FOLDER, 'data_5208_20251025.csv')
-# --- END MODIFIED ---
+# Stock list files in GCS
+NASDAQ_LISTED_FILE = "nasdaqlisted.txt"
+KOSPI_KOSDAQ_FILE = "data_5208_20251025.csv"
 
 LAG_PERIODS = 90
 full_feature_columns = ['Close', 'Volume', 'stock_sentiment_avg', 'stock_news_total_count', 'sector_sentiment_avg', 'sector_relevance_avg']
@@ -82,8 +82,8 @@ financial_feature_columns_list = [
 full_feature_columns.extend(financial_feature_columns_list)
 no_financial_feature_columns = [col for col in full_feature_columns if col not in financial_feature_columns_list]
 
-_LOADED_MODELS = {} # Cache for models
-_LOADED_TICKERS = {} # Cache for tickers list
+_LOADED_MODELS = {}
+_STOCK_POOL = [] # Global list to store stock tickers
 
 OUTDATED_SAVE_THRESHOLD = 60
 
@@ -147,321 +147,373 @@ def determine_financial_data_presence(features_dict: dict) -> bool:
             return False
     return True
 
-# Dummy function for fetching news/sentiment data (replace with actual implementation)
-def fetch_news_sentiment_data(stock_ticker: str, date: datetime.datetime) -> Dict[str, Any]:
-    return {
-        'stock_sentiment_avg': random.uniform(-0.5, 0.5),
-        'stock_news_total_count': random.randint(0, 100),
-        'sector_sentiment_avg': random.uniform(-0.3, 0.3),
-        'sector_relevance_avg': random.uniform(0, 1),
-    }
+def load_stock_pool():
+    global _STOCK_POOL
+    logger.info("Loading stock tickers from GCS...")
+    
+    # Load NASDAQ stocks
+    try:
+        nasdaq_blob = get_gcs_blob(NASDAQ_LISTED_FILE)
+        with nasdaq_blob.open("r") as f:
+            nasdaq_df = pd.read_csv(f, sep='|')
+            nasdaq_tickers = nasdaq_df['Symbol'].tolist()
+            _STOCK_POOL.extend(nasdaq_tickers)
+        logger.info(f"Loaded {len(nasdaq_tickers)} NASDAQ tickers.")
+    except Exception as e:
+        logger.error(f"Error loading NASDAQ stock list from GCS: {e}")
 
-# Dummy function for fetching financial data (replace with actual implementation)
-def fetch_financial_data(stock_ticker: str, date: datetime.datetime) -> Optional[Dict[str, Any]]:
-    # Simulate occasional missing financial data (e.g., if a company doesn't report financials for that period)
-    if random.random() < 0.3: 
+    # Load KOSPI/KOSDAQ stocks
+    try:
+        kospi_kosdaq_blob = get_gcs_blob(KOSPI_KOSDAQ_FILE)
+        with kospi_kosdaq_blob.open("r") as f:
+            kospi_kosdaq_df = pd.read_csv(f, encoding='euc-kr')
+            # Yfinance에서 한국 주식을 조회하기 위해 .KS 접미사 추가
+            kospi_kosdaq_tickers = [f"{code}.KS" for code in kospi_kosdaq_df['단축코드'].astype(str).tolist()]
+            _STOCK_POOL.extend(kospi_kosdaq_tickers)
+        logger.info(f"Loaded {len(kospi_kosdaq_tickers)} KOSPI/KOSDAQ tickers.")
+    except Exception as e:
+        logger.error(f"Error loading KOSPI/KOSDAQ stock list from GCS: {e}")
+
+    _STOCK_POOL = list(set(_STOCK_POOL)) # Remove duplicates
+    logger.info(f"Total {len(_STOCK_POOL)} unique stock tickers loaded into pool.")
+
+def fetch_data_from_ai2_api(stock_ticker: str, period: str, target_date: datetime.datetime):
+    """
+    ai2:8001/data 엔드포인트에서 필요한 데이터를 가져옵니다.
+    target_date는 YYYY-MM-DD 형식으로, ai2 API가 특정 시점의 데이터를 제공하도록
+    period와 함께 사용될 수 있지만, 현재 ai2 API는 target_date 파라미터를 직접
+    받지 않고 period만 사용합니다. 따라서 여기서는 period를 '1d'로 고정하고,
+    Yfinance에서 target_date에 가까운 데이터를 필터링하는 방식으로 사용합니다.
+    (ai2 API는 최신 데이터만 반환하는 것으로 가정합니다)
+    """
+    data_url = f"http://34.16.110.5:8001/data?stock={stock_ticker}&period=1d" # '1d' 또는 '1h' 등 적절한 period
+    
+    try:
+        response = requests.get(data_url, timeout=30) # 타임아웃 30초 설정
+        response.raise_for_status() # HTTP 오류가 발생하면 예외 발생
+        data = response.json()
+        
+        features = data.get("processed_features_for_prediction")
+        if features:
+            # ai2 API에서 받은 features에 None이 있다면 그대로 유지
+            # Sentiment 관련 필드는 0으로 채워질 것이며, 재무 데이터는 없으면 None일 것임
+            return features
+        else:
+            logger.warning(f"No 'processed_features_for_prediction' found in AI2 API response for {stock_ticker}.")
+            return None
+    except requests.exceptions.Timeout:
+        logger.error(f"AI2 API request timed out for {stock_ticker}.")
         return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching data from AI2 API for {stock_ticker}: {e}")
+        return None
+
+def get_random_learning_data(stock_ticker: str, today_utc: datetime.datetime):
+    """
+    특정 종목에 대해 모델 학습에 필요한 (features, actual_value) 쌍을 무작위 시점에서 가져옵니다.
+    """
+    ticker = yf.Ticker(stock_ticker)
     
-    financial_data = {}
+    # Yfinance에서 해당 종목의 상장일(가장 오래된 데이터)을 가져옵니다.
+    # period='max'가 아닌 명시적인 start/end 날짜를 사용하여 에러 발생 가능성을 줄임.
+    # 안전하게 아주 먼 과거부터 오늘까지의 데이터를 요청합니다.
+    # Yfinance는 보통 UTC를 사용하므로, datetime 객체에 tzinfo를 명시해줍니다.
+    end_date_for_yf_fetch = today_utc - datetime.timedelta(days=1) # 오늘 데이터는 아직 완전하지 않으므로 어제까지
+    # Yfinance API 호출 시 start_date를 지정하여 period='max' 오류 회피
+    # 예를 들어 2000년 1월 1일 또는 그 이전으로 충분히 먼 과거 날짜를 지정
+    start_date_for_yf_fetch = datetime.datetime(1980, 1, 1, tzinfo=datetime.timezone.utc) # 충분히 먼 과거
+    
+    try:
+        hist = ticker.history(start=start_date_for_yf_fetch.strftime('%Y-%m-%d'), 
+                              end=end_date_for_yf_fetch.strftime('%Y-%m-%d'), 
+                              interval="1d")
+    except Exception as e:
+        logger.error(f"Error fetching historical data for {stock_ticker} using yfinance start/end dates: {e}")
+        return None, None, None
+
+    if hist.empty:
+        logger.error(f"No historical data found for {stock_ticker} in the specified range. Skipping.")
+        return None, None, None
+    
+    if hist.index.tz is None:
+        hist.index = hist.index.tz_localize('UTC')
+
+    first_trade_date = hist.index.min()
+
+    # 최소 LAG_PERIODS + 1일 (actual_value)의 데이터를 채울 수 있는 시작 지점
+    earliest_possible_target_date = first_trade_date + datetime.timedelta(days=LAG_PERIODS + 1)
+    
+    # 학습에 사용될 수 있는 유효한 날짜 범위 설정
+    # (LAG_PERIODS)일의 과거 데이터와 1일의 실제값(actual_value)을 포함해야 하므로,
+    # 인덱스 상으로 LAG_PERIODS + 1 번째 이후의 날짜부터 선택 가능.
+    # 그리고 오늘 이전의 날짜여야 함. (end_date_for_yf_fetch가 이미 하루 전까지를 의미)
+    valid_target_dates = hist.index[
+        (hist.index >= earliest_possible_target_date)
+    ]
+
+    if valid_target_dates.empty:
+        logger.warning(f"No valid target dates for learning for {stock_ticker} after considering lag periods and available history. Skipping.")
+        return None, None, None
+
+    # 무작위로 하나의 target_date 선택
+    random_target_date_idx = random.randint(0, len(valid_target_dates) - 1)
+    predicted_value_for_time = valid_target_dates[random_target_date_idx]
+
+    # actual_value는 predicted_value_for_time의 'Close' 값
+    actual_value = hist.loc[predicted_value_for_time]['Close']
+
+    # LAG_PERIODS에 필요한 과거 데이터를 추출 (predicted_value_for_time 직전까지)
+    # predicted_value_for_time을 포함하여 LAG_PERIODS + 1 개의 데이터가 필요합니다.
+    # 즉, predicted_value_for_time 기준으로 이전 LAG_PERIODS 일의 데이터와 predicted_value_for_time의 데이터
+    
+    # target_date를 포함하여 LAG_PERIODS + 1개의 데이터를 가져와야 합니다.
+    # 예를 들어, LAG_PERIODS=90 이면, target_date 포함 91일치 데이터 필요
+    # target_date는 예측의 'target'이므로, feature는 target_date-1d 까지의 데이터
+    # 따라서, features에 사용될 데이터는 target_date보다 1일 전까지의 LAG_PERIODS 개
+    # actual_value는 target_date의 'Close'
+    
+    # yfinance DataFrame에서 target_date를 포함하여 과거 LAG_PERIODS+1 개의 행을 가져옵니다.
+    # `loc`을 사용하면 날짜 범위로 쉽게 필터링 가능
+    
+    # predicted_value_for_time을 기준으로 그 이전 LAG_PERIODS 일치 데이터와
+    # predicted_value_for_time 날짜의 데이터 (actual_value)를 가져옴
+    
+    # 데이터프레임에서 target_date를 찾고, 그 인덱스로부터 뒤로 LAG_PERIODS + 1개 가져오기
+    target_date_iloc = hist.index.get_loc(predicted_value_for_time)
+    
+    # 실제 피처에 사용될 데이터는 target_date_iloc 바로 전까지 LAG_PERIODS 개
+    # actual_value는 target_date_iloc의 'Close'
+    
+    if target_date_iloc < LAG_PERIODS: # LAG_PERIODS 만큼 이전 데이터가 존재하지 않는 경우
+        logger.warning(f"Not enough historical data ({target_date_iloc + 1} days including target) for {stock_ticker} to fulfill {LAG_PERIODS} lag periods for target date {predicted_value_for_time}. Skipping.")
+        return None, None, None
+
+    # 피처에 사용될 과거 데이터: target_date_iloc의 이전 LAG_PERIODS개
+    # 예: target_date_iloc가 90 (즉 91번째 데이터)이면, iloc[0] ~ iloc[89] (90개)
+    recent_hist_for_features = hist.iloc[target_date_iloc - LAG_PERIODS : target_date_iloc]
+
+    if len(recent_hist_for_features) < LAG_PERIODS: # 다시 한번 확인
+        logger.warning(f"After slicing, still not enough historical data ({len(recent_hist_for_features)} days) for {stock_ticker} to fulfill {LAG_PERIODS} lag periods for target date {predicted_value_for_time}. Skipping.")
+        return None, None, None
+    
+    # AI2 API에서 재무 및 센티먼트 데이터 가져오기 (이 부분은 '최신' 데이터로 가정)
+    # AI2 API는 특정 `target_date`에 대한 과거 재무/센티먼트 데이터를 제공하지 않을 수 있으므로,
+    # 여기서는 AI2 API가 제공하는 가장 최신 재무/센티먼트 데이터를 사용하도록 합니다.
+    # 이것이 사용자님의 의도와 다르다면 알려주세요.
+    ai2_features = fetch_data_from_ai2_api(stock_ticker, "1d", today_utc) # period는 1d로 고정
+    if ai2_features is None:
+        logger.warning(f"Failed to fetch AI2 API features for {stock_ticker}. Skipping learning for this stock.")
+        return None, None, None
+
+    # features_json 구성
+    features_dict = {}
+    
+    # Yfinance 주가/거래량 lag features
+    # 'Close'와 'Volume'은 `recent_hist_for_features`의 가장 마지막 값 (즉, predicted_value_for_time 바로 전날 값)
+    current_close_val = recent_hist_for_features['Close'].iloc[-1]
+    current_volume_val = recent_hist_for_features['Volume'].iloc[-1]
+
+    features_dict['Close'] = current_close_val
+    features_dict['Volume'] = current_volume_val
+
+    for i in range(1, LAG_PERIODS + 1):
+        # 역순으로 채워넣기 (예: Close_lag_1은 가장 최근 과거, Close_lag_90은 가장 오래된 과거)
+        # recent_hist_for_features는 이미 LAG_PERIODS 개를 가지고 있으므로 -i 로 접근
+        features_dict[f'Close_lag_{i}'] = recent_hist_for_features['Close'].iloc[-i]
+        features_dict[f'Volume_lag_{i}'] = recent_hist_for_features['Volume'].iloc[-i]
+
+    # AI2 API에서 가져온 센티먼트 및 재무 데이터 병합
+    for col in ['stock_sentiment_avg', 'stock_news_total_count', 'sector_sentiment_avg', 'sector_relevance_avg']:
+        features_dict[col] = ai2_features.get(col, 0.0) # 없으면 0으로 채움
+    
     for col in financial_feature_columns_list:
-        if col.endswith('CFS') or col.endswith('OFS'):
-            financial_data[col] = random.uniform(-1_000_000_000, 1_000_000_000)
-        elif col in ['PBR', 'PER', 'ROR']:
-            financial_data[col] = random.uniform(0.1, 50.0)
-    return financial_data
+        features_dict[col] = ai2_features.get(col, None) # 없으면 None으로 채움
 
-# --- MODIFIED: get_all_tradeable_tickers to load from GCS ---
-def get_all_tradeable_tickers(nasdaq_gcs_path: str = GCS_NASDAQ_LISTED_FILE, krx_gcs_path: str = GCS_KRX_LISTED_FILE) -> List[str]:
-    """
-    Loads US (NASDAQ) and KR (KOSPI/KOSDAQ) tickers from GCS files.
-    Returns a combined list of tickers, correctly formatted for yfinance.
-    Caches the loaded tickers to avoid repeated GCS calls.
-    """
-    if 'all_tickers' in _LOADED_TICKERS:
-        logger.debug("Returning cached ticker list.")
-        return _LOADED_TICKERS['all_tickers']
-
-    us_tickers = []
-    kr_tickers = []
-
-    # 1. Load US (NASDAQ) tickers from GCS
-    try:
-        nasdaq_blob = get_gcs_blob(nasdaq_gcs_path)
-        if nasdaq_blob.exists():
-            with nasdaq_blob.open("r", encoding='utf-8') as f:
-                # Skip header line
-                header = f.readline()
-                for line in f:
-                    parts = line.strip().split('|')
-                    if len(parts) > 0:
-                        symbol = parts[0]
-                        # Basic filtering for common stocks/ADRs
-                        if len(symbol) <= 5 and not symbol.endswith(('W', 'R', 'U', 'P')): # Added 'P' for preferred
-                            us_tickers.append(symbol)
-            logger.info(f"Loaded {len(us_tickers)} US (NASDAQ) tickers from GCS: {nasdaq_gcs_path}.")
-        else:
-            logger.error(f"NASDAQ ticker file not found in GCS at {nasdaq_gcs_path}.")
-    except Exception as e:
-        logger.error(f"Error loading NASDAQ tickers from GCS: {e}")
-
-    # 2. Load KR (KOSPI/KOSDAQ) tickers from GCS
-    try:
-        krx_blob = get_gcs_blob(krx_gcs_path)
-        if krx_blob.exists():
-            # Read CSV content into a string buffer, then to pandas
-            with krx_blob.open("r", encoding='euc-kr') as f:
-                krx_df = pd.read_csv(f, dtype={'단축코드': str})
-            
-            # Filter out preferred stocks or other non-standard issues
-            # '주식종류' column can be used for more robust filtering if needed
-            krx_df = krx_df[krx_df['증권구분'] == '주권']
-            
-            for index, row in krx_df.iterrows():
-                ticker = row['단축코드']
-                market_type = row['시장구분']
-                # Check for NaNs or empty strings in ticker/market_type
-                if pd.notna(ticker) and pd.notna(market_type) and ticker.strip() != '':
-                    if market_type == 'KOSPI':
-                        kr_tickers.append(f"{ticker}.KS")
-                    elif market_type in ['KOSDAQ', 'KOSDAQ GLOBAL']:
-                        kr_tickers.append(f"{ticker}.KQ")
-            logger.info(f"Loaded {len(kr_tickers)} KR (KOSPI/KOSDAQ) tickers from GCS: {krx_gcs_path}.")
-        else:
-            logger.error(f"KRX ticker file not found in GCS at {krx_gcs_path}.")
-    except Exception as e:
-        logger.error(f"Error loading KRX tickers from GCS: {e}")
-
-    # Combine both lists
-    all_tickers = us_tickers + kr_tickers
-    if not all_tickers:
-        logger.error("No tickers loaded from GCS. Using a predefined fallback list.")
-        fallback_tickers = ['AAPL', 'MSFT', '005930.KS', '000660.KS'] # Fallback
-        _LOADED_TICKERS['all_tickers'] = fallback_tickers
-        return fallback_tickers
+    # 모든 필수 feature_columns이 features_dict에 있는지 확인하고 없으면 None 또는 0으로 채움 (안전 장치)
+    for col in full_feature_columns:
+        if col not in features_dict:
+            if col in financial_feature_columns_list:
+                features_dict[col] = None # 재무 데이터는 None
+            else:
+                features_dict[col] = 0.0 # 그 외는 0.0
     
-    _LOADED_TICKERS['all_tickers'] = all_tickers
-    return all_tickers
+    logger.debug(f"Generated features for {stock_ticker} at {predicted_value_for_time}: {features_dict}")
+    return features_dict, actual_value, predicted_value_for_time
 
-def run_single_model_training_iteration(tolerance_percent=0.01):
+
+def update_models_with_random_data(num_updates_per_run=1):
     db = SessionLocal()
     try:
-        logger.info("--- Starting Single Model Training Iteration ---")
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-
-        # 1. Randomly select a stock ticker from combined US/KR list
-        all_tickers = get_all_tradeable_tickers() # This now loads from GCS
-        if not all_tickers:
-            logger.error("No tradeable tickers available for selection. Exiting.")
+        if not _STOCK_POOL:
+            load_stock_pool()
+        if not _STOCK_POOL:
+            logger.error("No stock tickers available in the pool. Cannot perform model updates.")
             return
 
-        selected_ticker = random.choice(all_tickers)
-        logger.info(f"Randomly selected stock ticker for training: {selected_ticker}")
+        logger.info("--- Starting Incremental Model Update with Random Data ---")
 
-        # 2. Fetch historical data for the selected ticker to determine valid training dates
-        try:
-            ticker_obj = yf.Ticker(selected_ticker)
+        active_models_info = db.query(ModelVersion).filter(ModelVersion.is_active == True).all()
+        
+        active_models = {}
+        active_gcs_paths = {}
+        active_model_entries = {}
+        for info in active_models_info:
+            try:
+                # 모델은 한 번 로드되면 캐시됨
+                active_models[info.model_type] = load_model_from_gcs(info.gcs_path)
+                active_gcs_paths[info.model_type] = info.gcs_path
+                active_model_entries[info.model_type] = info
+            except FileNotFoundError:
+                logger.error(f"Active model file not found in GCS for {info.model_type} at {info.gcs_path}. Skipping update for this model type.")
+                continue
+        
+        if not active_models:
+            logger.error("No active models successfully loaded. Cannot perform update.")
+            return
+
+        models_to_update = {
+            m_type: pickle.loads(pickle.dumps(model_instance)) # 딥카피하여 원본 모델을 직접 수정하지 않음
+            for m_type, model_instance in active_models.items()
+        }
+
+        updates_made_with_financials = 0
+        updates_made_no_financials = 0
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+
+        for _ in range(num_updates_per_run): # 지정된 횟수만큼 업데이트 시도
+            stock_ticker = random.choice(_STOCK_POOL)
+            logger.info(f"Attempting to get learning data for random stock: {stock_ticker}")
             
-            # Fetch daily data for a broader range to pick a random date
-            hist_daily = ticker_obj.history(period="max", interval="1d")
-            
-            if hist_daily.empty:
-                logger.warning(f"No historical daily data from yfinance for {selected_ticker}. Skipping.")
-                return
+            features_dict, actual_value, predicted_value_for_time = get_random_learning_data(stock_ticker, now_utc)
 
-            if hist_daily.index.tz is None:
-                hist_daily.index = hist_daily.index.tz_localize('UTC')
+            if features_dict is None or actual_value is None or predicted_value_for_time is None:
+                logger.warning(f"Could not get valid learning data for {stock_ticker}. Skipping this iteration.")
+                continue
 
-            # Filter for dates that allow for LAG_PERIODS (90) days of lag data BEFORE the prediction date
-            # And also ensure the prediction date is not today or in the future
-            if len(hist_daily) < LAG_PERIODS + 1:
-                logger.warning(f"Not enough trading days ({len(hist_daily)}) for {selected_ticker} to create {LAG_PERIODS} lag features and a target. Skipping.")
-                return
-
-            trading_days = hist_daily.index.sort_values().tolist()
-
-            yesterday_utc = (now_utc - datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            valid_trading_days_for_prediction = [d for d in trading_days if d < yesterday_utc]
-
-            if len(valid_trading_days_for_prediction) < LAG_PERIODS + 1:
-                logger.warning(f"Not enough past trading days for {selected_ticker} to perform training. Skipping.")
-                return
-
-            random_prediction_date_index = random.randint(LAG_PERIODS, len(valid_trading_days_for_prediction) - 1)
-            random_prediction_date_ts = valid_trading_days_for_prediction[random_prediction_date_index]
-            random_prediction_date = random_prediction_date_ts.to_pydatetime()
-            
-            logger.info(f"Randomly selected prediction date for {selected_ticker}: {random_prediction_date.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-
-            # Extract data for features (LAG_PERIODS days before prediction date)
-            features_data_df = hist_daily[
-                (hist_daily.index < random_prediction_date_ts) &
-                (hist_daily.index >= valid_trading_days_for_prediction[random_prediction_date_index - LAG_PERIODS])
-            ].sort_index(ascending=False) # Sort descending to easily get lag_1, lag_2 etc.
-            
-            if len(features_data_df) < LAG_PERIODS:
-                logger.warning(f"Insufficient feature data ({len(features_data_df)} days) for {selected_ticker} for prediction on {random_prediction_date.strftime('%Y-%m-%d')}. Skipping.")
-                return
-
-            # The actual value for the prediction date
-            actual_value_for_prediction_date_df = hist_daily[
-                (hist_daily.index >= random_prediction_date_ts) &
-                (hist_daily.index < random_prediction_date_ts + datetime.timedelta(days=1))
-            ]
-
-            if actual_value_for_prediction_date_df.empty:
-                logger.warning(f"No actual closing price found for {selected_ticker} on {random_prediction_date.strftime('%Y-%m-%d')}. Skipping.")
-                return
-            
-            actual_value = actual_value_for_prediction_date_df['Close'].iloc[0]
-            if isinstance(actual_value, (np.float32, np.float64, np.number)):
-                actual_value = actual_value.item()
-            else:
-                actual_value = float(actual_value)
-
-            # Construct features_dict
-            features_dict = {}
-            
-            # Base features (from the last day *before* the prediction date)
-            last_day_data = features_data_df.iloc[0] 
-            features_dict['Close'] = last_day_data['Close']
-            features_dict['Volume'] = last_day_data['Volume']
-
-            # Lag features
-            for i in range(1, LAG_PERIODS + 1):
-                if i-1 < len(features_data_df): # Ensure index is within bounds
-                    lag_data = features_data_df.iloc[i-1] 
-                    features_dict[f'Close_lag_{i}'] = lag_data['Close']
-                    features_dict[f'Volume_lag_{i}'] = lag_data['Volume']
-                else:
-                    logger.warning(f"Not enough lag data for Close_lag_{i} for {selected_ticker} for prediction on {random_prediction_date.strftime('%Y-%m-%d')}.")
-                    features_dict[f'Close_lag_{i}'] = None
-                    features_dict[f'Volume_lag_{i}'] = None
-
-            # News and sentiment data (simulated for the day before prediction)
-            news_sentiment = fetch_news_sentiment_data(selected_ticker, features_data_df.index[0].to_pydatetime())
-            features_dict.update(news_sentiment)
-
-            # Financial data (simulated for the most recent available quarter/year before prediction)
-            financial_data = fetch_financial_data(selected_ticker, features_data_df.index[0].to_pydatetime())
-            if financial_data:
-                features_dict.update(financial_data)
-            else:
-                for col in financial_feature_columns_list:
-                    features_dict[col] = None 
-
-            # Determine model type
-            has_financial_data = determine_financial_data_presence(features_dict)
-            model_to_use_type = "with_financials" if has_financial_data else "no_financials"
-            
-            # Load active models
-            active_models_info = db.query(ModelVersion).filter(ModelVersion.is_active == True).all()
-            
-            active_models = {}
-            active_gcs_paths = {}
-            active_model_entries = {}
-            for info in active_models_info:
-                try:
-                    active_models[info.model_type] = load_model_from_gcs(info.gcs_path)
-                    active_gcs_paths[info.model_type] = info.gcs_path
-                    active_model_entries[info.model_type] = info
-                except FileNotFoundError:
-                    logger.error(f"Active model file not found in GCS for {info.model_type} at {info.gcs_path}. Skipping update for this model type.")
+            try:
+                has_financial_data = determine_financial_data_presence(features_dict)
+                model_to_update_type = "with_financials" if has_financial_data else "no_financials"
+                
+                if model_to_update_type not in models_to_update:
+                    logger.warning(f"Active model '{model_to_update_type}' not loaded/available. Skipping update for this data.")
                     continue
-            
-            if not active_models:
-                logger.error("No active models successfully loaded. Cannot perform update.")
-                return
 
-            if model_to_use_type not in active_models:
-                logger.warning(f"Active model '{model_to_use_type}' not loaded/available. Skipping training for {selected_ticker} on {random_prediction_date.strftime('%Y-%m-%d')}.")
-                return
-
-            # Make a copy of the model for this iteration's learning to avoid modifying the cached model before potential outdated save
-            model_for_learning = pickle.loads(pickle.dumps(active_models[model_to_use_type]))
-
-            # Perform prediction (dummy prediction for now, a real model would use model_for_learning.predict(X_for_prediction))
-            predicted_value = actual_value * (1 + random.uniform(-0.02, 0.02)) # Simulate a prediction
-
-            # Record prediction and verification
-            prediction_record = Prediction(
-                stock_ticker=selected_ticker,
-                prediction_made_at=now_utc,
-                predicted_value_for_time=random_prediction_date,
-                predicted_value=predicted_value,
-                features_json=features_dict,
-                actual_value=actual_value
-            )
-
-            error_margin_calculated = abs(prediction_record.predicted_value - prediction_record.actual_value) / prediction_record.actual_value
-            if isinstance(error_margin_calculated, (np.float32, np.float64, np.number)):
-                prediction_record.error_margin = error_margin_calculated.item()
-            else:
-                prediction_record.error_margin = float(error_margin_calculated)
-
-            prediction_record.is_correct = prediction_record.error_margin <= tolerance_percent
-            db.add(prediction_record)
-            db.commit()
-            logger.info(f"Recorded and verified simulated prediction {prediction_record.id} for {prediction_record.stock_ticker} @ {prediction_record.predicted_value_for_time.strftime('%Y-%m-%d %H:%M:%S UTC')}: Predicted={prediction_record.predicted_value:.4f}, Actual={prediction_record.actual_value:.4f}, Error={prediction_record.error_margin:.2%}, Correct={prediction_record.is_correct}")
-
-            # Incremental Model Update based on this single record
-            logger.info(f"Applying incremental update to '{model_to_use_type}' model with the new verified data.")
-            
-            selected_feature_cols = full_feature_columns if has_financial_data else no_financial_feature_columns
-            
-            X_for_learn = {}
-            data_is_complete = True
-            for col in selected_feature_cols:
-                value = features_dict.get(col)
-                if value is None:
-                    logger.warning(f"Missing or None feature '{col}' for the selected prediction record. Skipping learning for this record.")
-                    data_is_complete = False
-                    break
-                X_for_learn[col] = value
-            
-            if data_is_complete:
-                model_to_update_instance = model_for_learning # Use the copy we made
-                model_to_update_instance.learn_one(X_for_learn, actual_value)
-                logger.info(f"Model '{model_to_use_type}' has learned from the latest data.")
-
-                # Update model version in DB and GCS
-                model_entry = active_model_entries.get(model_to_use_type)
-                if model_entry:
-                    model_entry.update_count_since_last_outdated_save += 1 
-                    if model_entry.update_count_since_last_outdated_save >= OUTDATED_SAVE_THRESHOLD:
-                        logger.info(f"Saving outdated model for {model_to_use_type} as update count reached threshold.")
-                        # Load the *currently active* model from cache/GCS to save as outdated
-                        current_active_model_for_outdated_save = active_models[model_to_use_type] 
-                        filename_prefix = MODEL_WITH_FINANCIALS_FILENAME.replace(".pkl", "") if model_to_use_type == "with_financials" else MODEL_NO_FINANCIALS_FILENAME.replace(".pkl", "")
-                        save_outdated_model_to_gcs(current_active_model_for_outdated_save, filename_prefix)
-                        model_entry.update_count_since_last_outdated_save = 0
-                    
-                    save_model_to_gcs(model_to_update_instance, active_gcs_paths[model_to_use_type])
-                    
-                    model_entry.version_tag = f"updated_{model_to_use_type}_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}"
-                    model_entry.trained_at = datetime.datetime.now(datetime.timezone.utc)
-                    db.add(model_entry)
-                    db.commit()
-                    logger.info(f"Active '{model_to_use_type}' model version in DB updated and counter handled.")
+                selected_model = models_to_update[model_to_update_type]
+                
+                # 예측값 생성 (predict_one)
+                # features_dict에서 모델에 필요한 특성만 추출
+                if has_financial_data:
+                    selected_feature_cols = full_feature_columns
                 else:
-                    logger.warning(f"No active model entry found for {model_to_use_type} in DB. Skipping DB update and GCS save for this model.")
-            else:
-                logger.warning(f"Skipped learning for {selected_ticker} on {random_prediction_date.strftime('%Y-%m-%d')} due to incomplete features.")
+                    selected_feature_cols = no_financial_feature_columns
+                
+                X_for_predict_learn = {}
+                data_is_complete = True
+                for col in selected_feature_cols:
+                    value = features_dict.get(col)
+                    if value is None: # None이거나 키가 없는 경우
+                        # 재무 데이터는 None 허용, 그 외는 0.0으로 대체
+                        if col in financial_feature_columns_list:
+                            X_for_predict_learn[col] = None
+                        else:
+                            X_for_predict_learn[col] = 0.0 # 기본값으로 채움
+                            if value is None: # 진짜 None이었으면 경고
+                                logger.warning(f"Feature '{col}' was None for prediction/learn for {stock_ticker}. Replaced with 0.0.")
+                    else:
+                        X_for_predict_learn[col] = value
+                
+                # River 모델은 DictInput을 가정하므로, 여기서 DataFrame 변환은 필요 없음
+                # 단, 예측/학습 전에 Log1pTransformer를 거쳐야 한다면 추가 필요.
+                # 현재 Log1pTransformer는 Prediction 클래스 바깥에서 독립적으로 작동하므로
+                # 여기서 직접 적용해야 함. (기존 verify_predictions.py에는 이 부분이 없었음)
+                # 만약 모델 파이프라인에 Log1pTransformer가 포함되어 있다면, 모델이 알아서 처리할 것임.
+                # 여기서는 raw features_dict를 바로 모델에 전달하는 것으로 가정합니다.
+                
+                predicted_value = selected_model.predict_one(X_for_predict_learn)
 
-        except Exception as e:
-            logger.error(f"Error during single training iteration for {selected_ticker}: {e}", exc_info=True)
+                logger.debug(f"Learning from {stock_ticker} at {predicted_value_for_time} using {model_to_update_type} model. Predicted: {predicted_value:.4f}, Actual: {actual_value:.4f}")
+                selected_model.learn_one(X_for_predict_learn, actual_value)
+
+                for key, value in features_dict.items():
+                    if isinstance(value, np.integer): # Covers int64, int32, etc.
+                        features_dict[key] = int(value)
+                    elif isinstance(value, np.floating): # Covers float64, float32, etc.
+                        features_dict[key] = float(value)
+                    # Add other numpy types if you encounter them (e.g., np.bool_)
+                    elif isinstance(value, datetime.datetime):
+                        features_dict[key] = value.isoformat() # or str(value) if just for logging
+
+                # Prediction 테이블에 학습 이력을 기록 (선택 사항, 요청에는 없었지만 유용할 수 있음)
+                # 예측 검증 부분은 삭제되었으므로, 여기서 Prediction 객체를 생성하여 DB에 저장하는 것은
+                # 모델 학습 이력을 남기기 위함입니다.
+                new_prediction_record = Prediction(
+                    stock_ticker=stock_ticker,
+                    prediction_made_at=now_utc,
+                    predicted_value_for_time=predicted_value_for_time,
+                    predicted_value=predicted_value,
+                    features_json=features_dict,
+                    actual_value=actual_value,
+                    is_correct=abs(predicted_value - actual_value) / actual_value <= 0.01 if actual_value != 0 else False, # 1% 오차율로 일단 계산
+                    error_margin=abs(predicted_value - actual_value) / actual_value if actual_value != 0 else float('inf'),
+                    model_version=active_model_entries[model_to_update_type].version_tag
+                )
+                db.add(new_prediction_record)
+                db.commit() # 각 예측마다 커밋하여 실패 시 롤백 방지
+                
+                if has_financial_data:
+                    updates_made_with_financials += 1
+                else:
+                    updates_made_no_financials += 1
+
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Failed to learn from data for {stock_ticker} at {predicted_value_for_time}: {e}", exc_info=True)
+                # continue to next random stock
+
+        if updates_made_with_financials == 0 and updates_made_no_financials == 0:
+            logger.info("No successful updates were made to any model during this run.")
+            return
+
+        logger.info(f"Successfully applied {updates_made_with_financials} updates to 'with_financials' model.")
+        logger.info(f"Successfully applied {updates_made_no_financials} updates to 'no_financials' model.")
+
+        for model_type, model_instance in models_to_update.items():
+            model_entry = active_model_entries.get(model_type)
+            if not model_entry:
+                logger.warning(f"No active model entry found for {model_type} in DB. Skipping save for this model.")
+                continue
+
+            gcs_path_for_type = active_gcs_paths[model_type]
+            
+            model_entry.update_count_since_last_outdated_save += 1 
+            if model_entry.update_count_since_last_outdated_save >= OUTDATED_SAVE_THRESHOLD:
+                logger.info(f"Saving outdated model for {model_type} as update count reached threshold.")
+                # 현재 GCS에 저장되어 있는 '활성화된' 모델을 백업 (아직 업데이트되지 않은 버전)
+                current_active_model_for_outdated_save = active_models[model_type]
+                filename_prefix = MODEL_WITH_FINANCIALS_FILENAME.replace(".pkl", "") if model_type == "with_financials" else MODEL_NO_FINANCIALS_FILENAME.replace(".pkl", "")
+                save_outdated_model_to_gcs(current_active_model_for_outdated_save, filename_prefix)
+                model_entry.update_count_since_last_outdated_save = 0
+            
+            save_model_to_gcs(model_instance, gcs_path_for_type) # 학습된 새 모델을 GCS에 저장
+            
+            model_entry.version_tag = f"updated_{model_type}_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}"
+            model_entry.trained_at = datetime.datetime.now(datetime.timezone.utc)
+            db.add(model_entry)
+            db.commit()
+            logger.info(f"Active '{model_type}' model version in DB updated and counter handled.")
+
+        logger.info("--- Incremental Model Update Complete ---")
 
     except Exception as e:
         db.rollback()
-        logger.error(f"General error during run_single_model_training_iteration: {e}", exc_info=True)
+        logger.error(f"Error during model update process with random data: {e}", exc_info=True)
     finally:
         db.close()
-        logger.info("--- Single Model Training Iteration Complete ---")
-
 
 if __name__ == "__main__":
     db = SessionLocal()
     try:
-        # Initial setup for "with_financials" model
+        # --- 기존 초기 모델 버전 설정 로직 유지 ---
         initial_with_financials_entry = db.query(ModelVersion).filter(ModelVersion.model_type == "with_financials", ModelVersion.is_active == True).first()
         if not initial_with_financials_entry:
             if get_gcs_blob(MODEL_WITH_FINANCIALS_GCS_PATH).exists():
@@ -479,7 +531,6 @@ if __name__ == "__main__":
             else:
                 logger.error(f"Initial model '{MODEL_WITH_FINANCIALS_GCS_PATH}' not found in GCS for 'with_financials'. Please upload it first.")
         
-        # Initial setup for "no_financials" model
         initial_no_financials_entry = db.query(ModelVersion).filter(ModelVersion.model_type == "no_financials", ModelVersion.is_active == True).first()
         if not initial_no_financials_entry:
             if get_gcs_blob(MODEL_NO_FINANCIALS_GCS_PATH).exists():
@@ -501,7 +552,8 @@ if __name__ == "__main__":
         db.rollback()
         logger.error(f"Error during initial model setup: {e}", exc_info=True)
     finally:
-        db.close()
+        db.close() # 초기 설정 후 DB 세션 닫기
 
-    # Run a single training iteration
-    run_single_model_training_iteration()
+    # --- 추가된 부분: 종목 풀 로드 및 모델 업데이트 함수 호출 ---
+    load_stock_pool() # 종목 풀 로드
+    update_models_with_random_data(num_updates_per_run=5) # 한 번 실행 시 5개 종목에 대해 업데이트 시도 (조정 가능)

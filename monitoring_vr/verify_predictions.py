@@ -168,7 +168,7 @@ def verify_and_update_predictions(tolerance_percent=0.01, lookback_days_for_upda
             for stock_ticker in stocks_to_fetch:
                 try:
                     ticker = yf.Ticker(stock_ticker)
-                    hist = ticker.history(period="60d", interval="1h") 
+                    hist = ticker.history(period="5d", interval="1h") 
                     if not hist.empty:
                         if hist.index.tz is None:
                             hist.index = hist.index.tz_localize('UTC') 
