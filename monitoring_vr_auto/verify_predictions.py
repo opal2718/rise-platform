@@ -55,8 +55,8 @@ GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "your-gcs-bucket-name")
 GCS_MODEL_FOLDER = "" 
 GCS_OUTDATED_FOLDER = "outdated" 
 
-MODEL_WITH_FINANCIALS_FILENAME = "model_with_financials.pkl"
-MODEL_NO_FINANCIALS_FILENAME = "model_no_financials.pkl"
+MODEL_WITH_FINANCIALS_FILENAME = "model_with_financials_updating.pkl"
+MODEL_NO_FINANCIALS_FILENAME = "model_no_financials_updating.pkl"
 MODEL_WITH_FINANCIALS_GCS_PATH = os.path.join(GCS_MODEL_FOLDER, MODEL_WITH_FINANCIALS_FILENAME)
 MODEL_NO_FINANCIALS_GCS_PATH = os.path.join(GCS_MODEL_FOLDER, MODEL_NO_FINANCIALS_FILENAME)
 
@@ -166,7 +166,7 @@ def load_stock_pool():
     try:
         kospi_kosdaq_blob = get_gcs_blob(KOSPI_KOSDAQ_FILE)
         with kospi_kosdaq_blob.open("r") as f:
-            kospi_kosdaq_df = pd.read_csv(f, encoding='euc-kr')
+            kospi_kosdaq_df = pd.read_csv(f)
             # Yfinance에서 한국 주식을 조회하기 위해 .KS 접미사 추가
             kospi_kosdaq_tickers = [f"{code}.KS" for code in kospi_kosdaq_df['단축코드'].astype(str).tolist()]
             _STOCK_POOL.extend(kospi_kosdaq_tickers)
@@ -360,11 +360,12 @@ def update_models_with_random_data(num_updates_per_run=1):
         for info in active_models_info:
             try:
                 # 모델은 한 번 로드되면 캐시됨
-                active_models[info.model_type] = load_model_from_gcs(info.gcs_path)
-                active_gcs_paths[info.model_type] = info.gcs_path
+                update_path = info.gcs_path.replace(".pkl", "")+"_updating.pkl"
+                active_models[info.model_type] = load_model_from_gcs(update_path)
+                active_gcs_paths[info.model_type] = update_path
                 active_model_entries[info.model_type] = info
             except FileNotFoundError:
-                logger.error(f"Active model file not found in GCS for {info.model_type} at {info.gcs_path}. Skipping update for this model type.")
+                logger.error(f"Active model file not found in GCS for {info.model_type} at {update_path}. Skipping update for this model type.")
                 continue
         
         if not active_models:
