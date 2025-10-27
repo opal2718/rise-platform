@@ -39,17 +39,17 @@ export default function Home() {
           <div>
             <div className="text-4xl mb-3">📈</div>
             <h3 className="text-lg font-medium text-gray-700">AI 기반 주가 예측</h3>
-            <p className="text-sm text-gray-500 mt-1">LSTM, XGBoost 등을 활용한 정확한 예측</p>
+            <p className="text-sm text-gray-500 mt-1">River의 ARFR을 활용한 유연한 예측</p>
           </div>
           <div>
             <div className="text-4xl mb-3">🧠</div>
             <h3 className="text-lg font-medium text-gray-700">설명 가능한 AI</h3>
-            <p className="text-sm text-gray-500 mt-1">SHAP, KAN을 통해 예측 근거를 시각화</p>
+            <p className="text-sm text-gray-500 mt-1">SHAP을 통해 예측 근거를 시각화</p>
           </div>
           <div>
             <div className="text-4xl mb-3">💡</div>
             <h3 className="text-lg font-medium text-gray-700">창업 커뮤니티 지원</h3>
-            <p className="text-sm text-gray-500 mt-1">청소년 창업 정보, 커뮤니티, 자료 제공</p>
+            <p className="text-sm text-gray-500 mt-1">창업 정보, 커뮤니티, 자료 제공</p>
           </div>
         </div>
       </section>

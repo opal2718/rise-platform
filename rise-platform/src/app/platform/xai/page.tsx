@@ -328,7 +328,7 @@ export default function PredictExplainPage() {
 
         {/* Search Section */}
         <div className="mb-12 bg-white p-8 rounded-lg shadow-lg">
-          <label htmlFor="stock-search" className="block text-lg font-medium text-gray-700 mb-3">종목 검색</label>
+          <label htmlFor="stock-search" className="block text-lg font-medium text-gray-700 mb-3">종목 검색(약 3분 가량 소요될 수 있습니다.)</label>
           <div className="flex flex-col sm:flex-row gap-4 mb-6">
             <input
               id="stock-search"

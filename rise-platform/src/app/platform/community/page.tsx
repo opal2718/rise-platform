@@ -6,12 +6,14 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import Header from '@/components/Header';
 import { useEffect, useState } from "react";
-import { supabase } from '../../../lib/supabaseClient';
+// import { supabase } from '../../../lib/supabaseClient'; // Supabase 관련 코드 주석 처리 또는 삭제
 
 type Post = {
+  id: number; // Cloud SQL에서 id가 자동으로 생성됩니다.
   title: string;
   text: string;
   userID: string;
+  created_at: string; // 타임스탬프 필드 추가
 };
 
 const StartupCommunityPage = () => {
@@ -20,28 +22,43 @@ const StartupCommunityPage = () => {
   const [content, setContent] = useState("");
   const [posts, setPosts] = useState<Post[]>([]);
 
-  // Fetch posts from Supabase
+  // 백엔드 API URL
+  const API_BASE_URL = "http://34.16.110.5:7000/api"; // 백엔드 서버 주소
+
+  // Fetch posts from backend API
   const fetchPosts = async () => {
-    const { data, error } = await supabase.from('community posts').select('*');
-    if (error) {
-      console.error('불러오기 실패:', error.message);
-    } else {
-      setPosts(data.reverse()); // 최신 글이 위로
+    try {
+      const response = await fetch(`${API_BASE_URL}/posts`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      setPosts(data);
+    } catch (error) {
+      console.error('게시글 불러오기 실패:', error);
     }
   };
 
-  // Add post and then refresh list
+  // Add post to backend API and then refresh list
   const addPost = async (_user: string, _title: string, _text: string) => {
-    const { error } = await supabase
-      .from('community posts')
-      .insert([{ title: _title, userID: _user, text: _text }]);
+    try {
+      const response = await fetch(`${API_BASE_URL}/posts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ title: _title, userID: _user, text: _text }),
+      });
 
-    if (error) {
-      console.error('삽입 실패:', error.message);
-    } else {
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      // const newPost = await response.json(); // 새로 추가된 게시글 데이터를 받을 수도 있습니다.
       setTitle("");
       setContent("");
-      await fetchPosts(); // Re-fetch posts instead of reloading
+      await fetchPosts(); // 게시글 추가 후 목록 새로고침
+    } catch (error) {
+      console.error('게시글 추가 실패:', error);
     }
   };
 
@@ -51,6 +68,7 @@ const StartupCommunityPage = () => {
   }, []);
 
   const handleSubmit = () => {
+    // 실제 사용자 ID를 사용하는 것이 좋습니다. 여기서는 임시로 "TESTID" 사용
     addPost("TESTID", title, content);
   };
 
@@ -82,11 +100,11 @@ const StartupCommunityPage = () => {
       </Card>
 
       <div className="grid gap-4">
-        {filteredPosts.map((post, index) => (
-          <Card key={index}>
+        {filteredPosts.map((post) => ( // key prop에 id 사용
+          <Card key={post.id}>
             <CardContent className="p-4">
               <h3 className="text-lg font-semibold">{post.title}</h3>
-              <p className="text-sm text-muted-foreground mb-1">by {post.userID}</p>
+              {/* <p className="text-sm text-muted-foreground mb-1">by {post.userID}</p> */}
               <p>{post.text}</p>
             </CardContent>
           </Card>
