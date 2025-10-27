@@ -46,3 +46,5 @@ log_features_with_financials = financial_feature_columns_list + log_features_com
 feature_columns_with_financials = base_feature_columns + lagged_base_features + financial_feature_columns_list
 feature_columns_no_financials = base_feature_columns + lagged_base_features
 
+full_feature_columns = base_feature_columns + lagged_base_features + financial_feature_columns_list
+no_financial_feature_columns = base_feature_columns + lagged_base_features

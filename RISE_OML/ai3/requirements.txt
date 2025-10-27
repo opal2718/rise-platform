@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+shap
+google-cloud-storage # For GCS interaction in retraining script
+river

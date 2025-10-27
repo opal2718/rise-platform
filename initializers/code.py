@@ -9,7 +9,7 @@ import numpy as np
 
 from rise_proto import initialize_dart_data, get_full_financial_report 
 from log1p import Log1pTransformer
-from constants import MODEL_NO_FINANCIALS_SAVE_PATH, MODEL_WITH_FINANCIALS_SAVE_PATH, base_feature_columns, lagged_base_features, financial_feature_columns_list, DART_API_KEY, KOREAN_STOCK_TICKERS, INTERNATIONAL_STOCK_TICKERS, FULL_DATA_FETCH_RANGE, STOCK_PERIOD, LAG_PERIODS
+from constants import log_features_common, log_features_with_financials, feature_columns_no_financials, feature_columns_with_financials, MODEL_NO_FINANCIALS_SAVE_PATH, MODEL_WITH_FINANCIALS_SAVE_PATH, base_feature_columns, lagged_base_features, financial_feature_columns_list, DART_API_KEY, KOREAN_STOCK_TICKERS, INTERNATIONAL_STOCK_TICKERS, FULL_DATA_FETCH_RANGE, STOCK_PERIOD, LAG_PERIODS
 from get_data import get_processed_features_for_stock
 
 # --- Mount Google Drive ---
@@ -32,8 +32,6 @@ if __name__ == "__main__":
     #os.makedirs(MODEL_CHECKPOINT_DIR, exist_ok=True)
 
     # ✅ Log transform both Volume & financials
-    log_features_common = ['Volume'] + [f'Volume_lag_{i}' for i in range(1, LAG_PERIODS + 1)]
-    log_features_with_financials = financial_feature_columns_list + log_features_common
 
     # ✅ Nonlinear model (Adaptive Random Forest)
     model_with_financials = (
@@ -50,8 +48,6 @@ if __name__ == "__main__":
 
     # --- Feature Columns ---
 
-    feature_columns_with_financials = base_feature_columns + lagged_base_features + financial_feature_columns_list
-    feature_columns_no_financials = base_feature_columns + lagged_base_features
 
     print("\n--- Starting Model Training ---")
 
@@ -63,19 +59,8 @@ if __name__ == "__main__":
 
         # get_processed_features_for_stock에서 재무 데이터 유무 플래그도 함께 반환
         df, current_stock_has_financial_data = get_processed_features_for_stock(
-            stock_ticker, FULL_DATA_FETCH_RANGE, STOCK_PERIOD, LAG_PERIODS, is_korean, dart_initialized_successfully
+            stock_ticker, "2025-10-24", STOCK_PERIOD, LAG_PERIODS, is_korean, dart_initialized_successfully
         )
-
-        if df.empty:
-            print(f"No data for {stock_ticker}.")
-            continue
-
-        df['target_next_close'] = df['Close'].shift(-1)
-        df = df.dropna(subset=['target_next_close'])
-
-        if df.empty:
-            print(f"No target data for {stock_ticker} after dropping NaNs.")
-            continue
 
         # 어떤 모델을 훈련할지 결정
         if current_stock_has_financial_data and is_korean: # 한국 주식이고 실제 재무 데이터가 있다면 with_financials 모델 훈련

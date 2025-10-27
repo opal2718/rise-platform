@@ -12,7 +12,7 @@ import json
 # --- 설정 (경로 변경 가능) ---
 # GCP Cloud Storage 버킷 경로로 변경
 # 예: "gs://your-gcs-bucket-name/corp_codes.csv"
-CORP_CODES_FILE_PATH = "./corp_codes.csv"
+CORP_CODES_FILE_PATH = "initializers/corp_codes.csv"
 
 # --- 전역 변수 ---
 _CORP_CODES_DF = None
