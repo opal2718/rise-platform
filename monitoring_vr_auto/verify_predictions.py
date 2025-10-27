@@ -165,7 +165,7 @@ def load_stock_pool():
     # Load KOSPI/KOSDAQ stocks
     try:
         kospi_kosdaq_blob = get_gcs_blob(KOSPI_KOSDAQ_FILE)
-        with kospi_kosdaq_blob.open("r") as f:
+        with kospi_kosdaq_blob.open("r", encoding='euc-kr') as f:
             kospi_kosdaq_df = pd.read_csv(f)
             # Yfinance에서 한국 주식을 조회하기 위해 .KS 접미사 추가
             kospi_kosdaq_tickers = [f"{code}.KS" for code in kospi_kosdaq_df['단축코드'].astype(str).tolist()]
